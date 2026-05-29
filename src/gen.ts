@@ -66,7 +66,7 @@ const R9_IMG_MODELS = (process.env.ROUTE9_IMG_MODELS || "cx/gpt-5.5-image,cx/gpt
   .split(",").map(s => s.trim()).filter(Boolean);
 
 async function try9RouterImage(prompt: string): Promise<Buffer | null> {
-  if (!R9_KEY) return null;
+  if (!R9_KEY) { console.log("[9r-img] no R9_KEY"); return null; }
   for (const model of R9_IMG_MODELS) {
     try {
       const r = await fetch(R9_IMG_URL, {
@@ -74,7 +74,11 @@ async function try9RouterImage(prompt: string): Promise<Buffer | null> {
         headers: { "Authorization": `Bearer ${R9_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({ model, prompt, n: 1, size: "1024x1024", quality: "auto", output_format: "png" }),
       });
-      if (!r.ok) continue;
+      if (!r.ok) {
+        const txt = await r.text().catch(() => "");
+        console.log(`[9r-img] ${model} status=${r.status} body=${txt.slice(0,200)}`);
+        continue;
+      }
       const j: any = await r.json();
       const b64 = j?.data?.[0]?.b64_json;
       if (b64) {
@@ -89,7 +93,8 @@ async function try9RouterImage(prompt: string): Promise<Buffer | null> {
           if (buf.length > 1000) return buf;
         }
       }
-    } catch {}
+      console.log(`[9r-img] ${model} returned no b64 or url`);
+    } catch (e: any) { console.log(`[9r-img] ${model} throw: ${e?.message || e}`); }
   }
   return null;
 }
