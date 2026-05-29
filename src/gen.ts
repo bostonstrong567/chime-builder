@@ -278,7 +278,8 @@ export const PRODUCTS: Record<ProductKey, ProductDef> = {
     negatives: "NO long strands, NO chime structure, NO mass of elements. Earrings only — two small matched pieces.",
     qcSubject: "matched pair of dangle earrings",
     defaultScene: "displayed on soft cream linen with a sprinkle of beach sand, soft morning light",
-    framing: "Square composition, earring pair centered on left half, soft empty cream space on right for text overlay.",
+    // square-composition framing removed — AI now uses default 1024×1024 framing same as other products
+    framing: "Earring pair centered on left half, soft empty cream space on right for text overlay.",
   },
   necklace: {
     label: "Necklace",

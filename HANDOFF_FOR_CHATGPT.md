@@ -161,6 +161,7 @@ All other settings live in code.
 14. **Wired `product` param** through `buildPrompt` (image prompt), `qcImage` (vision check phrasing), `suggestText` (title/message/footer copy adapts to product type). All product-aware.
 15. **Added `GET /api/products`** — lists supported product keys + labels + default scenes.
 16. **Deleted default seeded chimes** — the catalog now starts empty on every deploy; the shop owner re-uploads their materials post-deploy (Render free tier has ephemeral storage).
+17. **Removed "Square composition" framing** from the earrings product (`src/gen.ts`). The AI image gen always returns 1024×1024 regardless of prompt wording; the explicit "Square composition" phrasing was confusing the model. All products now use plain "subject on left, empty right for text overlay" framing.
 
 ---
 
