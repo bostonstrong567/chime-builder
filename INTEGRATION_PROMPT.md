@@ -6,7 +6,26 @@ Paste this entire document to ChatGPT/Claude/Cursor along with your site's tech 
 
 ## 1 · What this API does
 
-Generates a personalized "wind chime preview card" for Coastal Creations. The customer picks chime materials from a catalog (uploaded by admin), provides a title / message / footer / scene / "personal touches" keywords, and the API returns a finished composite image: AI-generated photoreal wind chime on the left, custom calligraphic message card on the right.
+Generates a personalized **handcrafted-product preview card** for Coastal Creations. The customer picks materials from a catalog (uploaded by admin), chooses a product type (wind chime, earrings, necklace, bracelet, ornament, mobile, garland, wreath, keychain, magnet, ring, anklet), provides a title / message / footer / scene / "personal touches" keywords, and the API returns a finished composite image: AI-generated photoreal product on the left, custom calligraphic message card on the right.
+
+Supported product types (live list at `GET /api/products`):
+
+| `product` key | Output |
+|---|---|
+| `wind_chime` *(default)* | Vertical hanging chime on driftwood top |
+| `earrings` | Matched dangle pair w/ French hook posts |
+| `necklace` | Pendant on delicate chain |
+| `bracelet` | Curved wire-linked bracelet w/ clasp |
+| `ornament` | Single hanging ornament w/ jute loop |
+| `mobile` | Horizontal crossbar w/ suspended elements |
+| `garland` | Long horizontal strung garland |
+| `wreath` | Circular driftwood-base wreath |
+| `keychain` | Small charm on split ring |
+| `magnet` | Element on cork-backed fridge magnet |
+| `ring` | Wire-wrapped adjustable ring |
+| `anklet` | Thin chain ankle bracelet |
+
+Each product has its own AI scaffold (how the materials assemble), negatives (what NOT to render — earrings ≠ chime), QC vision check ("is this clearly a pair of earrings?"), and default scene. Pass the `product` key on `/api/generate`, `/api/preview`, and `/api/suggest`. Omit it to default to `wind_chime`.
 
 Internally:
 - **GPT-Image** (cx/gpt-5.5-image and fallbacks via the 9router gateway, 4 Codex accounts) generates a 1024×1024 photoreal wind chime image from the prompt.
@@ -67,6 +86,25 @@ Returns `{ "ok": true, "ts": 1780093765592 }`. Use for uptime checks. No auth, n
 ### `GET /` 
 
 Returns the API self-description (endpoint list + version). Use to discover the live endpoint set.
+
+---
+
+### `GET /api/products`
+
+List the supported product types. Use to populate a product picker in the UI.
+
+**Response:**
+```json
+{
+  "products": [
+    { "key": "wind_chime", "label": "Wind Chime", "default_scene": "hanging on a seaside porch..." },
+    { "key": "earrings",   "label": "Earrings",   "default_scene": "displayed on soft cream linen..." },
+    { "key": "necklace",   "label": "Necklace",   "default_scene": "draped gracefully on cream linen..." }
+  ]
+}
+```
+
+The `key` is what you send in the `product` field of `/api/generate`, `/api/preview`, and `/api/suggest`. The `default_scene` is used when the caller doesn't supply a `scene` value.
 
 ---
 
@@ -156,20 +194,23 @@ Re-run the vision describe on a chime (useful if the auto-describe didn't fire).
 
 ### `POST /api/suggest`
 
-Get an AI-suggested title / message / footer / scene for the card, conditioned on the picked chimes and any context already filled.
+Get an AI-suggested title / message / footer / scene for the card, conditioned on the picked materials, product type, and any context already filled.
 
 **Body:**
 ```json
 {
   "field": "title",                // "title" | "message" | "footer" | "scene"
-  "picks": [1, 2],                 // chime IDs (optional but recommended)
+  "product": "earrings",           // optional, defaults to "wind_chime"
+  "picks": [1, 2],                 // material IDs (optional but recommended)
   "title": "Forever In Our Hearts", // existing values for OTHER fields (context)
   "message": "...",
   "footer": "...",
-  "scene": "sunset porch",
+  "scene": "cream linen with sand",
   "keywords": "grandfather loved yellow, sailboat charm"
 }
 ```
+
+The `product` value steers the brand voice toward that item — message text for `earrings` mentions wearing, for `wind_chime` mentions breezes.
 
 **Response:**
 ```json
@@ -190,7 +231,8 @@ The main event. Returns a finished composite card.
 **Body:**
 ```json
 {
-  "picks": [1, 2],                  // chime IDs — required, at least one
+  "picks": [1, 2],                  // material IDs — required, at least one
+  "product": "wind_chime",          // optional, default "wind_chime"; see GET /api/products
   "title": "Forever In Our Hearts",
   "message": "Like the ocean's gentle whisper...",
   "footer": "May this chime bring comfort.",
@@ -200,6 +242,8 @@ The main event. Returns a finished composite card.
   "return_b64": false               // if true, response includes base64 PNG inline
 }
 ```
+
+When `product` is set to a non-chime value (e.g. `"earrings"`), the AI prompt switches to the matching scaffold (matched dangle pair, French hook posts, etc.), the QC vision check asks "is this clearly a pair of earrings?", and the default `scene` becomes that product's display setting (cream linen, soft morning light). If `scene` is supplied it overrides the default.
 
 **Response (default):**
 ```json
