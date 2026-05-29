@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: chime-builder
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ROUTE9_API_KEY
+        sync: false
+      - key: ROUTE9_URL
+        value: https://route-9.duckdns.org/v1
+      - key: ROUTE9_MODELS
+        value: cl/google/gemini-3.1-flash-lite-preview,smart-worker,gh/claude-haiku-4.5
+      - key: ROUTE9_IMG_MODELS
+        value: cx/gpt-5.5-image,cx/gpt-5.4-image,cx/gpt-5.3-image,cx/gpt-5.2-image
+      - key: QC_MAX_ATTEMPTS
+        value: "8"
+      - key: QC_PASS_SCORE
+        value: "7"

@@ -1,0 +1,17 @@
+[Unit]
+Description=Chime Builder
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Projects/chime-builder
+Environment=PORT=4711
+ExecStart=/home/ubuntu/.bun/bin/bun src/server.ts
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/home/ubuntu/Projects/chime-builder/server.log
+StandardError=append:/home/ubuntu/Projects/chime-builder/server.log
+
+[Install]
+WantedBy=multi-user.target
