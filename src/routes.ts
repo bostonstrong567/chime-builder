@@ -144,9 +144,9 @@ app.post("/api/generate", rateLimit(limits.generate), async (c) => {
   if (!best) return c.json({ error: "image generation failed" }, 500);
 
   const card = await buildCard({
-    title: title || "A Beautiful Wind Chime",
+    title: title || "A Coastal Creations Keepsake",
     message: message || "Handcrafted with love, made just for you.",
-    footer: footer || "May this chime bring you comfort, peace, and cherished memories with every gentle breeze.",
+    footer: footer || "May this piece bring you comfort, peace, and cherished memories.",
     aiImage: best.buf,
   });
   const fn = saveResult(card, "png");
