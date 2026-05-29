@@ -15,6 +15,12 @@ services:
         value: cl/google/gemini-3.1-flash-lite-preview,smart-worker,gh/claude-haiku-4.5
       - key: ROUTE9_IMG_MODELS
         value: cx/gpt-5.5-image,cx/gpt-5.4-image,cx/gpt-5.3-image,cx/gpt-5.2-image
+      - key: ADMIN_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: UPLOAD_MAX_BYTES
+        value: "8388608"
       - key: QC_MAX_ATTEMPTS
         value: "8"
       - key: QC_PASS_SCORE

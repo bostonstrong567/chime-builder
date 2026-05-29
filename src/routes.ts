@@ -1,5 +1,6 @@
 import { app, db, UPLOADS, RESULTS } from "./core.js";
 import { genChimeImage, buildPrompt, buildCard, saveResult, describeChime, suggestText, qcImage } from "./gen.js";
+import { requireAdmin, rateLimit, limits, UPLOAD_MAX_BYTES, UPLOAD_ALLOWED_MIME } from "./security.js";
 import { writeFileSync, readFileSync } from "fs";
 import { join, extname } from "path";
 import { randomBytes } from "crypto";
@@ -24,18 +25,21 @@ function publicBase(c: any): string {
   return `${proto}://${host}`;
 }
 
-// ---------- CHIMES (catalog) ----------
-app.post("/api/chimes", async (c) => {
+// ---------- CHIMES (catalog) — uploads/rename/delete/describe require ADMIN_KEY ----------
+app.post("/api/chimes", rateLimit(limits.upload), requireAdmin, async (c) => {
   const body = await c.req.parseBody({ all: true });
   const files = ([] as File[]).concat(body["images"] as any || []);
   const names = ([] as string[]).concat((body["names"] as any) || []);
   const created: any[] = [];
+  const skipped: any[] = [];
   const base = publicBase(c);
   let i = 0;
   for (const f of files) {
-    if (!(f instanceof File)) continue;
+    if (!(f instanceof File)) { skipped.push({ reason: "not a file" }); i++; continue; }
+    if (!UPLOAD_ALLOWED_MIME.has(f.type)) { skipped.push({ name: f.name, reason: `mime ${f.type} not allowed` }); i++; continue; }
+    if (f.size > UPLOAD_MAX_BYTES) { skipped.push({ name: f.name, reason: `${f.size} bytes exceeds ${UPLOAD_MAX_BYTES}` }); i++; continue; }
     const buf = Buffer.from(await f.arrayBuffer());
-    const ext = (extname(f.name) || ".png").toLowerCase();
+    const ext = (extname(f.name) || ".png").toLowerCase().replace(/[^a-z0-9.]/g, "");
     const fn = `chime_${Date.now()}_${randomBytes(3).toString("hex")}${ext}`;
     writeFileSync(join(UPLOADS, fn), buf);
     const nm = cleanName(names[i] || f.name);
@@ -47,27 +51,28 @@ app.post("/api/chimes", async (c) => {
     }).catch(()=>{});
     i++;
   }
-  return c.json({ ok: true, created });
+  return c.json({ ok: true, created, skipped });
 });
 
-app.get("/api/chimes", (c) => {
+app.get("/api/chimes", rateLimit(limits.read), (c) => {
   const rows = db.prepare("SELECT * FROM chimes ORDER BY created DESC").all() as any[];
   const base = publicBase(c);
   return c.json({ chimes: rows.map(r => ({ ...r, image_url: `${base}/uploads/${r.image_path}` })) });
 });
 
-app.put("/api/chimes/:id", async (c) => {
+app.put("/api/chimes/:id", requireAdmin, async (c) => {
   const { name } = await c.req.json();
-  db.prepare("UPDATE chimes SET name=? WHERE id=?").run(name, c.req.param("id"));
+  const safe = (name || "").toString().slice(0, 120);
+  db.prepare("UPDATE chimes SET name=? WHERE id=?").run(safe, c.req.param("id"));
   return c.json({ ok: true });
 });
 
-app.delete("/api/chimes/:id", (c) => {
+app.delete("/api/chimes/:id", requireAdmin, (c) => {
   db.prepare("DELETE FROM chimes WHERE id=?").run(c.req.param("id"));
   return c.json({ ok: true });
 });
 
-app.post("/api/chimes/:id/describe", async (c) => {
+app.post("/api/chimes/:id/describe", requireAdmin, async (c) => {
   const row: any = db.prepare("SELECT * FROM chimes WHERE id=?").get(c.req.param("id"));
   if (!row) return c.json({ error: "not found" }, 404);
   const desc = await describeChime(row.image_path);
@@ -75,8 +80,8 @@ app.post("/api/chimes/:id/describe", async (c) => {
   return c.json({ ok: true, description: desc });
 });
 
-// ---------- ORDERS ----------
-app.get("/api/orders", (c) => {
+// ---------- ORDERS — admin only ----------
+app.get("/api/orders", requireAdmin, (c) => {
   const rows = db.prepare("SELECT * FROM orders ORDER BY created DESC").all();
   const base = publicBase(c);
   return c.json({ orders: rows.map((r: any) => ({
@@ -87,7 +92,7 @@ app.get("/api/orders", (c) => {
 });
 
 // ---------- TEXT SUGGEST ----------
-app.post("/api/suggest", async (c) => {
+app.post("/api/suggest", rateLimit(limits.suggest), async (c) => {
   const body = await c.req.json();
   const field = body.field as "title"|"message"|"footer"|"scene";
   if (!["title","message","footer","scene"].includes(field)) return c.json({ error: "bad field" }, 400);
@@ -107,7 +112,7 @@ app.post("/api/suggest", async (c) => {
 });
 
 // ---------- GENERATE ----------
-app.post("/api/generate", async (c) => {
+app.post("/api/generate", rateLimit(limits.generate), async (c) => {
   const { picks, title, message, footer, scene, seed, keywords, return_b64 } = await c.req.json();
   if (!picks?.length) return c.json({ error: "pick at least one chime" }, 400);
 
@@ -157,7 +162,7 @@ app.post("/api/generate", async (c) => {
 });
 
 // ---------- PREVIEW (raw AI image, no card overlay) ----------
-app.post("/api/preview", async (c) => {
+app.post("/api/preview", rateLimit(limits.preview), async (c) => {
   const { picks, scene, seed, keywords, return_b64 } = await c.req.json();
   const ph = (picks || []).map(() => "?").join(",");
   const chimes: any[] = picks?.length ? db.prepare(`SELECT name, description FROM chimes WHERE id IN (${ph})`).all(...picks) : [];
