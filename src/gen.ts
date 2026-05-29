@@ -153,21 +153,22 @@ export async function genChimeImage(prompt: string, seed?: number, model?: strin
   throw new Error("All image endpoints failed");
 }
 
-// QC — score generated image against material expectations. Returns 0-10 + issues.
-export async function qcImage(buf: Buffer, expectedMaterials: string): Promise<{score:number; issues:string[]; ok:boolean}> {
+// QC — score generated image against material + product expectations. Returns 0-10 + issues.
+export async function qcImage(buf: Buffer, expectedMaterials: string, product?: string | null): Promise<{score:number; issues:string[]; ok:boolean}> {
   const fail = { score: 5, issues: [] as string[], ok: true };
+  const { def: prod } = resolveProduct(product);
   try {
     const dataUrl = `data:image/jpeg;base64,${buf.toString("base64")}`;
     const txt = await chatComplete([{
       role: "user",
       content: [
-        { type: "text", text: `Evaluate this image as a handcrafted wind chime made from: ${expectedMaterials}.
+        { type: "text", text: `Evaluate this image as a handcrafted ${prod.label.toLowerCase()} made from: ${expectedMaterials}.
 
 Check:
-1. Is the main subject clearly a hanging wind chime (not bamboo tubes, not random objects)?
+1. Is the main subject clearly a ${prod.qcSubject} (not a different product type, not random objects)?
 2. Are the materials visually consistent with the description (right colors, right items)?
-3. Is composition usable (chime on left, empty/soft right area for text overlay)?
-4. Any obvious AI artifacts (mangled hands, extra heads, distorted shells)?
+3. Is composition usable (subject on left side, empty/soft right area for text overlay)?
+4. Any obvious AI artifacts (mangled hands, extra heads, distorted shapes)?
 
 Respond ONLY as compact JSON:
 {"score": 1-10, "issues": ["short issue 1", "short issue 2"]}
@@ -206,25 +207,34 @@ export async function describeChime(filename: string): Promise<string | null> {
 
 // Text suggestion for client form fields (title/message/footer/scene).
 type SuggestField = "title" | "message" | "footer" | "scene";
-const FIELD_GUIDE: Record<SuggestField, string> = {
-  title: "A short, heartfelt card title (3-6 words). Romantic, memorial, or celebratory. Examples: 'Forever In Our Hearts', 'Whispers From The Sea', 'In Loving Memory'.",
-  message: "A heartfelt 2-3 sentence message (30-50 words) for a wind chime keepsake card. Evocative, warm, coastal imagery. No corny clichés. Examples: 'Like the ocean\\'s gentle whisper, this chime carries memories that never fade. Each shell tells a story of love that lingers long after the tide pulls back.'",
-  footer: "A short closing wish (10-20 words), italic-feel. Examples: 'May this chime bring comfort, peace, and cherished memories with every gentle breeze.'",
-  scene: "A short 8-15 word scene/setting description for the chime to hang in. Examples: 'hanging on a sunlit seaside porch overlooking the ocean at sunset', 'beside a window with soft morning light over a coastal garden'.",
-};
+function fieldGuide(field: SuggestField, productLabel: string): string {
+  const p = productLabel.toLowerCase();
+  switch (field) {
+    case "title":
+      return `A short, heartfelt card title (3-6 words). Romantic, memorial, or celebratory. Examples: 'Forever In Our Hearts', 'Whispers From The Sea', 'In Loving Memory'.`;
+    case "message":
+      return `A heartfelt 2-3 sentence message (30-50 words) for a handcrafted ${p} keepsake card. Evocative, warm, coastal imagery. No corny clichés. Examples: 'Like the ocean\\'s gentle whisper, this ${p} carries memories that never fade.'`;
+    case "footer":
+      return `A short closing wish (10-20 words), italic-feel. Examples: 'May this ${p} bring comfort, peace, and cherished memories with every wear.'`;
+    case "scene":
+      return `A short 8-15 word scene/setting description for where the ${p} is shown or worn. Examples for a chime: 'hanging on a sunlit seaside porch'. Examples for earrings: 'displayed on cream linen beside a vase of sea grass'.`;
+  }
+}
 export async function suggestText(
   field: SuggestField,
   chimeDescs: string[],
-  context: Partial<Record<SuggestField, string>> & { keywords?: string },
+  context: Partial<Record<SuggestField, string>> & { keywords?: string; product?: string | null },
 ): Promise<string | null> {
+  const { def: prod } = resolveProduct(context.product);
   const ctxLines: string[] = [];
-  if (chimeDescs.length) ctxLines.push(`Wind chime contains: ${chimeDescs.join("; ")}`);
+  ctxLines.push(`Product type: ${prod.label}`);
+  if (chimeDescs.length) ctxLines.push(`Made from: ${chimeDescs.join("; ")}`);
   if (context.keywords?.trim()) ctxLines.push(`Personal touches / memories to weave in: ${context.keywords.trim()}`);
   for (const k of ["title","message","footer","scene"] as SuggestField[]) {
     if (k !== field && context[k]?.trim()) ctxLines.push(`Existing ${k}: ${context[k]!.trim()}`);
   }
-  const sys = `You write heartfelt copy for handcrafted wind chime keepsake cards. Coastal Creations brand voice: warm, sincere, slightly poetic, never schmaltzy. Output ONLY the requested text — no preamble, no quotes, no labels.`;
-  const usr = `${ctxLines.join("\n")}\n\nGenerate the ${field} only. ${FIELD_GUIDE[field]}`;
+  const sys = `You write heartfelt copy for handcrafted Coastal Creations ${prod.label.toLowerCase()} keepsake cards. Brand voice: warm, sincere, slightly poetic, never schmaltzy. Output ONLY the requested text — no preamble, no quotes, no labels.`;
+  const usr = `${ctxLines.join("\n")}\n\nGenerate the ${field} only. ${fieldGuide(field, prod.label)}`;
   const txt = await chatComplete([
     { role: "system", content: sys },
     { role: "user", content: usr },
@@ -233,19 +243,154 @@ export async function suggestText(
   return txt.replace(/^["'`]+|["'`]+$/g, "").trim().slice(0, field === "title" ? 80 : 500);
 }
 
+// ---------- PRODUCT REGISTRY ----------
+// Each product describes how the AI should compose the materials and what to forbid.
+export type ProductKey =
+  | "wind_chime" | "earrings" | "necklace" | "bracelet" | "ornament"
+  | "mobile" | "garland" | "wreath" | "keychain" | "magnet" | "ring" | "anklet";
+
+interface ProductDef {
+  label: string;
+  // How the materials are physically assembled into this product.
+  scaffold: string;
+  // What the model must NOT draw (avoid wrong product confusion).
+  negatives: string;
+  // Subject phrasing used by QC vision check.
+  qcSubject: string;
+  // Default scene when caller doesn't supply one.
+  defaultScene: string;
+  // Composition framing — most products want left-half subject, right-half empty for text overlay.
+  framing: string;
+}
+
+export const PRODUCTS: Record<ProductKey, ProductDef> = {
+  wind_chime: {
+    label: "Wind Chime",
+    scaffold: "wind chime sculpture, each piece individually strung on natural jute twine, dangling vertically from a small piece of weathered driftwood at the top, with small knots between each piece",
+    negatives: "NO bamboo tubes, NO metal pipes, NO glass cylinders. Only the listed natural elements hanging from twine.",
+    qcSubject: "hanging wind chime",
+    defaultScene: "hanging on a seaside porch overlooking the ocean at sunset",
+    framing: "Vertical portrait composition, chime hangs on left side of frame, soft empty background on right side for text overlay.",
+  },
+  earrings: {
+    label: "Earrings",
+    scaffold: "matched pair of handcrafted dangle earrings, each shell or element delicately wire-wrapped in thin gold-fill or silver wire, suspended below a small hypoallergenic French hook earwire post, both earrings shown side by side at slightly different angles",
+    negatives: "NO long strands, NO chime structure, NO mass of elements. Earrings only — two small matched pieces.",
+    qcSubject: "matched pair of dangle earrings",
+    defaultScene: "displayed on soft cream linen with a sprinkle of beach sand, soft morning light",
+    framing: "Square composition, earring pair centered on left half, soft empty cream space on right for text overlay.",
+  },
+  necklace: {
+    label: "Necklace",
+    scaffold: "handcrafted pendant necklace, single central element wire-wrapped and hanging from a delicate gold-fill or silver chain that loops behind to a small clasp, pendant prominently displayed",
+    negatives: "NO chime structure, NO multiple hanging strands, NO bracelet.",
+    qcSubject: "necklace with central pendant on a chain",
+    defaultScene: "draped gracefully on cream linen with soft natural light",
+    framing: "Composition centered slightly left, pendant clearly visible, soft empty space on right for text overlay.",
+  },
+  bracelet: {
+    label: "Bracelet",
+    scaffold: "handcrafted bracelet laid in a graceful curve, individual elements connected by delicate gold-fill or silver wire links and a small lobster clasp, photographed flat",
+    negatives: "NO long pendant, NO chime, NO necklace chain.",
+    qcSubject: "bracelet laid flat in a curve",
+    defaultScene: "on cream linen with a few scattered grains of sand, soft natural light",
+    framing: "Horizontal composition, bracelet arcing across left two-thirds, soft empty cream space on right for text overlay.",
+  },
+  ornament: {
+    label: "Hanging Ornament",
+    scaffold: "single decorative hanging ornament, central element with a small loop of natural jute cord at the top for hanging, optionally accented with a single small charm or bead",
+    negatives: "NO multi-strand structure, NO chime tubes, NO earring pair.",
+    qcSubject: "single hanging ornament",
+    defaultScene: "hanging from a window edge with soft seaside light filtering through",
+    framing: "Vertical composition, ornament hanging on left side, soft empty background on right for text overlay.",
+  },
+  mobile: {
+    label: "Mobile",
+    scaffold: "delicate hanging mobile, multiple small elements suspended at different lengths from a horizontal driftwood crossbar at the top, balanced symmetrical composition with elements gently rotating",
+    negatives: "NO single vertical strand (that would be a chime), NO bamboo tubes.",
+    qcSubject: "hanging mobile with horizontal crossbar",
+    defaultScene: "hanging in a sun-drenched nursery or coastal living room",
+    framing: "Vertical composition, mobile hangs on left side, soft empty background on right for text overlay.",
+  },
+  garland: {
+    label: "Garland",
+    scaffold: "long horizontal garland, elements strung along a natural jute or cotton twine line at even spacing, draped gracefully along a mantel or window edge",
+    negatives: "NO vertical chime structure, NO single pendant.",
+    qcSubject: "horizontal garland strung with elements",
+    defaultScene: "draped along a weathered driftwood mantel with soft morning seaside light",
+    framing: "Horizontal landscape composition, garland stretching across left side, soft empty area on right for text overlay.",
+  },
+  wreath: {
+    label: "Wreath",
+    scaffold: "circular coastal wreath built on a driftwood ring base, elements attached around the ring in a balanced pattern with small touches of dried sea grass or jute ribbon",
+    negatives: "NO hanging strands, NO chime, NO straight garland.",
+    qcSubject: "circular coastal wreath",
+    defaultScene: "hanging on a weathered cottage door painted soft blue, late-afternoon light",
+    framing: "Centered circular composition on left, soft empty space on right for text overlay.",
+  },
+  keychain: {
+    label: "Keychain",
+    scaffold: "small handcrafted keychain, central element wire-wrapped and attached by a short braided leather or jute cord to a small split metal ring",
+    negatives: "NO chime, NO long strands, NO necklace.",
+    qcSubject: "small keychain with central element",
+    defaultScene: "lying on cream linen with soft natural light",
+    framing: "Composition centered slightly left, soft empty space on right for text overlay.",
+  },
+  magnet: {
+    label: "Refrigerator Magnet",
+    scaffold: "small decorative refrigerator magnet, single element mounted on a small circular cork or wood backing with a flat magnet on the reverse",
+    negatives: "NO hanging structure, NO chime, NO chain.",
+    qcSubject: "small refrigerator magnet",
+    defaultScene: "photographed on cream linen, soft natural light",
+    framing: "Centered composition on left, soft empty cream space on right for text overlay.",
+  },
+  ring: {
+    label: "Ring",
+    scaffold: "handcrafted ring, central element wire-wrapped onto an adjustable gold-fill or silver wire band",
+    negatives: "NO chain, NO chime, NO earring pair, NO bracelet.",
+    qcSubject: "single handcrafted ring",
+    defaultScene: "displayed on cream linen with soft natural light",
+    framing: "Centered macro composition on left, soft empty space on right for text overlay.",
+  },
+  anklet: {
+    label: "Anklet",
+    scaffold: "delicate anklet laid in a graceful curve, small elements spaced along a thin gold-fill or silver chain with a small lobster clasp",
+    negatives: "NO long pendant, NO chime, NO bracelet (anklet is thinner and more delicate).",
+    qcSubject: "delicate ankle bracelet (anklet)",
+    defaultScene: "on cream linen with a few grains of sand, soft warm light",
+    framing: "Horizontal composition, anklet arcing across left side, soft empty space on right for text overlay.",
+  },
+};
+
+export function listProducts() {
+  return Object.entries(PRODUCTS).map(([key, def]) => ({
+    key,
+    label: def.label,
+    default_scene: def.defaultScene,
+  }));
+}
+
+function resolveProduct(p?: string | null): { key: ProductKey; def: ProductDef } {
+  const k = (p || "wind_chime").toLowerCase().replace(/[\s-]+/g, "_") as ProductKey;
+  if (k in PRODUCTS) return { key: k, def: PRODUCTS[k] };
+  return { key: "wind_chime", def: PRODUCTS.wind_chime };
+}
+
 // Build the AI prompt from picked chimes. Accepts {name, description?} — prefers description when present.
 export function buildPrompt(
   chimes: Array<{name:string; description?:string|null}> | string[],
   extras?: string,
   keywords?: string,
+  product?: string | null,
 ): string {
+  const { def: prod } = resolveProduct(product);
   const parts: string[] = (chimes as any[]).map((c: any) =>
     typeof c === "string" ? c : (c.description?.trim() ? c.description.trim() : c.name)
   );
   const items = parts.join("; ");
-  const scene = extras?.trim() || "hanging on a seaside porch overlooking the ocean at sunset";
+  const scene = extras?.trim() || prod.defaultScene;
   const personal = keywords?.trim()
-    ? ` Subtly incorporate these personal touches into the chime composition (as colors, charms, or beach elements): ${keywords.trim()}.`
+    ? ` Subtly incorporate these personal touches into the composition (as colors, charms, or beach elements): ${keywords.trim()}.`
     : "";
   const lower = items.toLowerCase();
   const isShell = /shell|conch|nautilus|scallop|whelk|cowrie|sand dollar|starfish|clam|oyster/.test(lower);
@@ -253,25 +398,20 @@ export function buildPrompt(
   const isWood = /driftwood|wood|bamboo/.test(lower);
   let materialDesc: string;
   let materialNote: string;
-  let negatives: string;
   if (isShell) {
     materialDesc = "real natural seashells and beach treasures";
     materialNote = "Each shell clearly visible with authentic natural texture, ridges, iridescent surface, and real color variation.";
-    negatives = "Absolutely NO bamboo tubes, NO metal pipes, NO glass cylinders — only real seashells hanging from twine.";
   } else if (isGlass) {
     materialDesc = "polished sea glass and natural beach finds";
     materialNote = "Each glass piece frosted, smooth, translucent with soft pastel color, like genuine ocean-tumbled sea glass.";
-    negatives = "NO bamboo tubes, NO metal pipes — only sea glass and natural beach elements hanging from twine.";
   } else if (isWood) {
     materialDesc = "natural driftwood pieces and beach-found artisan elements";
     materialNote = "Each driftwood piece weathered, sun-bleached, with authentic grain.";
-    negatives = "NO bamboo tubes, NO metal pipes, NO plastic.";
   } else {
     materialDesc = "natural handcrafted artisan elements";
     materialNote = "Each element clearly visible with rich realistic texture and authentic detail.";
-    negatives = "NO generic bamboo tubes, NO metal pipes, NO mass-produced look.";
   }
-  return `Professional product photograph of a handcrafted wind chime sculpture made entirely from ${materialDesc}: ${items}. Each piece is individually strung on natural jute twine, dangling vertically from a small piece of weathered driftwood at the top, with small knots between each piece. ${materialNote}${personal} ${scene}. Macro detail, sharp focus, soft warm golden hour light, shallow depth of field with creamy bokeh background. ${negatives} Vertical portrait composition, chime hangs on left side of frame, soft empty background on right side for text.`;
+  return `Professional product photograph of a handcrafted ${prod.label.toLowerCase()} made from ${materialDesc}: ${items}. Assembly: ${prod.scaffold}. ${materialNote}${personal} ${scene}. Macro detail, sharp focus, soft warm golden hour light, shallow depth of field with creamy bokeh background. ${prod.negatives} ${prod.framing}`;
 }
 
 // Word-wrap helper

@@ -1,5 +1,5 @@
 import { app, db, UPLOADS, RESULTS } from "./core.js";
-import { genChimeImage, buildPrompt, buildCard, saveResult, describeChime, suggestText, qcImage } from "./gen.js";
+import { genChimeImage, buildPrompt, buildCard, saveResult, describeChime, suggestText, qcImage, listProducts } from "./gen.js";
 import { requireAdmin, rateLimit, limits, UPLOAD_MAX_BYTES, UPLOAD_ALLOWED_MIME } from "./security.js";
 import { writeFileSync, readFileSync } from "fs";
 import { join, extname } from "path";
@@ -54,6 +54,10 @@ app.post("/api/chimes", rateLimit(limits.upload), requireAdmin, async (c) => {
   return c.json({ ok: true, created, skipped });
 });
 
+app.get("/api/products", rateLimit(limits.read), (c) => {
+  return c.json({ products: listProducts() });
+});
+
 app.get("/api/chimes", rateLimit(limits.read), (c) => {
   const rows = db.prepare("SELECT * FROM chimes ORDER BY created DESC").all() as any[];
   const base = publicBase(c);
@@ -105,7 +109,7 @@ app.post("/api/suggest", rateLimit(limits.suggest), async (c) => {
   }
   const text = await suggestText(field, descs, {
     title: body.title, message: body.message, footer: body.footer, scene: body.scene,
-    keywords: body.keywords,
+    keywords: body.keywords, product: body.product,
   });
   if (!text) return c.json({ error: "no suggestion" }, 500);
   return c.json({ ok: true, text });
@@ -113,13 +117,13 @@ app.post("/api/suggest", rateLimit(limits.suggest), async (c) => {
 
 // ---------- GENERATE ----------
 app.post("/api/generate", rateLimit(limits.generate), async (c) => {
-  const { picks, title, message, footer, scene, seed, keywords, return_b64 } = await c.req.json();
+  const { picks, title, message, footer, scene, seed, keywords, return_b64, product } = await c.req.json();
   if (!picks?.length) return c.json({ error: "pick at least one chime" }, 400);
 
   const ph = picks.map(() => "?").join(",");
   const chimes: any[] = db.prepare(`SELECT name, description FROM chimes WHERE id IN (${ph})`).all(...picks);
 
-  const prompt = buildPrompt(chimes, scene, keywords);
+  const prompt = buildPrompt(chimes, scene, keywords, product);
   const seedNum = Number.isFinite(seed) ? Number(seed) : undefined;
   const expectedMats = chimes.map((c: any) => c.description?.trim() || c.name).join("; ");
 
@@ -132,7 +136,7 @@ app.post("/api/generate", rateLimit(limits.generate), async (c) => {
     attempts = i + 1;
     try {
       const buf = await genChimeImage(prompt, trySeed);
-      const qc = await qcImage(buf, expectedMats);
+      const qc = await qcImage(buf, expectedMats, product);
       if (!best || qc.score > best.score) best = { buf, score: qc.score, issues: qc.issues, seedUsed: trySeed };
       if (qc.score >= PASS_SCORE) break;
     } catch {}
@@ -163,10 +167,10 @@ app.post("/api/generate", rateLimit(limits.generate), async (c) => {
 
 // ---------- PREVIEW (raw AI image, no card overlay) ----------
 app.post("/api/preview", rateLimit(limits.preview), async (c) => {
-  const { picks, scene, seed, keywords, return_b64 } = await c.req.json();
+  const { picks, scene, seed, keywords, return_b64, product } = await c.req.json();
   const ph = (picks || []).map(() => "?").join(",");
   const chimes: any[] = picks?.length ? db.prepare(`SELECT name, description FROM chimes WHERE id IN (${ph})`).all(...picks) : [];
-  const prompt = buildPrompt(chimes, scene, keywords);
+  const prompt = buildPrompt(chimes, scene, keywords, product);
   const seedNum = Number.isFinite(seed) ? Number(seed) : undefined;
   const ai = await genChimeImage(prompt, seedNum);
   const fn = saveResult(ai, "png");

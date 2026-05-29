@@ -36,6 +36,7 @@ app.get("/", (c) => c.json({
   version: "1.0.0",
   endpoints: [
     "GET  /health",
+    "GET  /api/products",
     "GET  /api/chimes",
     "POST /api/chimes (multipart: images, names)",
     "PUT  /api/chimes/:id",
