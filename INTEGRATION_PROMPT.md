@@ -2,6 +2,8 @@
 
 Paste this entire document to ChatGPT/Claude/Cursor along with your site's tech stack. The agent should be able to plug the API into your site without further questions.
 
+**Now supports 12 product types.** Wind chimes plus earrings, necklace, bracelet, ornament, mobile, garland, wreath, keychain, magnet, ring, anklet. Pass `"product": "<key>"` in `/api/generate`, `/api/preview`, and `/api/suggest` to switch. Defaults to `wind_chime`. Call `GET /api/products` for the live list.
+
 ---
 
 ## 1 · What this API does
